@@ -1,36 +1,37 @@
 name: Build Unsigned IPA for EMHenTai
 
-# 触发条件：允许在 GitHub Actions 页面手动点击触发
 on:
   workflow_dispatch:
     inputs:
       branch:
         description: 'Target branch or tag to build'
         required: true
-        default: 'main' # 如果目标仓库主分支是 master，请修改此处
+        default: 'main'
 
 jobs:
   build:
     name: Build and Package IPA
-    runs-on: macos-14 # 使用 macOS 14 环境，内置了较新的 Xcode (15.x)
+    runs-on: macos-14
 
     steps:
-      # 1. 检出目标源代码仓库 (而非当前仅包含 workflow 的仓库)
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          repository: 'yuman07/emhentai' # 目标代码仓库
+          repository: 'yuman07/emhentai'
           ref: ${{ github.event.inputs.branch }}
           
-      # 2. 检查 Xcode 环境并切换到合适的版本
+      # 改进点 1：将 Xcode 版本提升至 15.4，原生支持 PinsStorage version 3
       - name: Setup Xcode version
-        run: sudo xcode-select -s /Applications/Xcode_15.2.app
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
           
-      # 3. 无签名强制编译项目
-      # -project: 指定工程文件
-      # -scheme: 指定构建方案
-      # CODE_SIGN_*: 强行注入环境变量，绕过 Apple ID 和 Provisioning Profile 检查
-      # SYMROOT: 将编译产物统一输出到当前目录的 build 文件夹中
+      # 改进点 2：双保险机制，删除不兼容的依赖锁文件并强制重新解析
+      - name: Resolve Swift Packages
+        run: |
+          # 删除可能导致版本冲突的依赖锁定文件
+          rm -f EMHenTai.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          # 强制 Xcode 提前独立解析并下载第三方依赖包
+          xcodebuild -resolvePackageDependencies -project EMHenTai.xcodeproj -scheme EMHenTai
+          
       - name: Build the app without signing
         run: |
           xcodebuild clean build \
@@ -43,20 +44,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SYMROOT=$(PWD)/build
 
-      # 4. 手动组装 Payload 并打包为 .ipa
-      # iOS 的 .ipa 文件本质上是一个包含 Payload 文件夹（其内部包含 .app）的 ZIP 压缩包
       - name: Package to .ipa
         run: |
           mkdir -p Payload
-          # 将编译生成的 .app 移动到 Payload 目录
           mv build/Release-iphoneos/EMHenTai.app Payload/
-          # 压缩为 ipa 文件 (-q 静默模式, -r 递归)
           zip -qr EMHenTai_Unsigned.ipa Payload
           
-      # 5. 上传生成的 IPA 作为 Artifact 以供下载
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: EMHenTai-Unsigned-IPA
           path: EMHenTai_Unsigned.ipa
-          retention-days: 7 # 制品保留 7 天
+          retention-days: 7
